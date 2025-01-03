@@ -27,7 +27,10 @@ print(f"Base Acceleration data shape: {ba_data.shape}")
 
 # Normalize the data to be between -1 and 1 for GAN training
 def normalize_data(data):
-    return (data - np.min(data)) / (np.max(data) - np.min(data)) * 2 - 1
+    min_val = np.min(data, axis=0, keepdims=True)
+    max_val = np.max(data, axis=0, keepdims=True)
+    return (data - min_val) / (max_val - min_val) * 2 - 1
+
 
 # Normalize each dimension
 de_data_normalized = normalize_data(de_data)
@@ -57,7 +60,7 @@ beta1 = 0.5
 
 # Generator
 class Generator(nn.Module):
-    def __init__(self, latent_dim, time_steps, channels):
+    def __init__(self, latent_dim, channels):
         super(Generator, self).__init__()
         self.model = nn.Sequential(
             nn.ConvTranspose1d(latent_dim, 128, 4, 1, 0),
@@ -74,9 +77,9 @@ class Generator(nn.Module):
         )
 
     def forward(self, z):
-        # Reshape input to match input dimensions
         z = z.view(z.size(0), latent_dim, 1)
         return self.model(z)
+
 
 class Discriminator(nn.Module):
     def __init__(self, time_steps, channels):
@@ -111,7 +114,7 @@ class Discriminator(nn.Module):
 
 
 # Initialize models
-generator = Generator(latent_dim, time_steps, channels).to(device)
+generator = Generator(latent_dim, channels).to(device)
 discriminator = Discriminator(time_steps, channels).to(device)
 
 # Loss function and optimizers
@@ -120,11 +123,9 @@ optimizer_G = optim.Adam(generator.parameters(), lr=learning_rate, betas=(beta1,
 optimizer_D = optim.Adam(discriminator.parameters(), lr=learning_rate, betas=(beta1, 0.999))
 
 # Stack the three signals into a single tensor with shape (num_samples, time_steps, channels)
-real_data = np.stack([de_data.flatten(), fe_data.flatten(), ba_data.flatten()], axis=-1)  # Shape: (time_steps, channels)
-real_data = torch.tensor(real_data, dtype=torch.float32).unsqueeze(0)  # Add batch dimension: (1, time_steps, channels)
+real_data = np.stack([de_data_normalized.flatten(), fe_data_normalized.flatten(), ba_data_normalized.flatten()], axis=-1)
+real_data = torch.tensor(real_data, dtype=torch.float32).permute(1, 0).unsqueeze(0)  # (batch, channels, time_steps)
 
-# For PyTorch, reorder to (batch_size, channels, time_steps)
-real_data = real_data.permute(0, 2, 1)  # Shape: (batch_size, channels, time_steps)
 
 # Create DataLoader
 dataset = TensorDataset(real_data)
