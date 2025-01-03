@@ -62,7 +62,7 @@ def load_data(base_path, segment_length):
         data, labels = experiment_data[exp_label]
         experiment_data[exp_label] = (
             np.array(data, dtype=np.float32),
-            np.eye(len(faults_idx))[labels] if labels else np.array([]),
+            np.array(labels),
         )
 
     return experiment_data
