@@ -3,7 +3,15 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
-from torch.utils.data import DataLoader, TensorDataset
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset, random_split
+from scipy.signal import resample
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+import torch.nn.functional as F
+
 
 ## Access the Variables 
 
@@ -170,12 +178,6 @@ for epoch in range(num_epochs):
 
 print("Training finished!")
 
-
-import matplotlib.pyplot as plt
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
-import numpy as np
-
 # Helper function to visualize signals
 def plot_signals(real_signals, fake_signals):
     """
@@ -296,3 +298,153 @@ def evaluate_generator(generator, real_data, latent_dim, device):
 
 # Evaluate the generator
 evaluate_generator(generator, real_data, latent_dim, device)
+
+# Data Augmentation using the Generator (already defined)
+def generate_augmented_data(generator, num_samples, latent_dim, device, time_steps, channels):
+    generator.eval()
+    with torch.no_grad():
+        z = torch.randn(num_samples, latent_dim, device=device)
+        synthetic_data = generator(z).cpu().numpy()
+
+    # Ensure the synthetic data matches the shape of real data (num_samples, time_steps, channels)
+    synthetic_data = synthetic_data.transpose(0, 2, 1)  # Shape: (num_samples, channels, time_steps)
+    
+    # Truncate or pad if necessary to match the time_steps of the real data
+    if synthetic_data.shape[2] != time_steps:
+        synthetic_data = synthetic_data[:, :, :time_steps]  # Truncate if longer
+        # Or, you could pad with zeros if it's shorter:
+        # synthetic_data = np.pad(synthetic_data, ((0, 0), (0, 0), (0, time_steps - synthetic_data.shape[2])), mode='constant')
+        
+    return synthetic_data
+
+# Prepare DataLoaders
+def prepare_dataloaders(real_data, synthetic_data, test_split=0.2, batch_size=32):
+    # Ensure synthetic_data matches real_data shape
+    synthetic_data = synthetic_data.transpose(0, 2, 1)  # (batch, time_steps, channels)
+    min_length = min(real_data.shape[1], synthetic_data.shape[1])
+    real_data = real_data[:, :min_length, :]
+    synthetic_data = synthetic_data[:, :min_length, :]
+
+    print(f"Real data shape: {real_data.shape}")
+    print(f"Synthetic data shape: {synthetic_data.shape}")
+
+    # Resize synthetic data to match the time step dimension of real data
+    synthetic_data_resized = F.interpolate(
+        torch.tensor(synthetic_data),  # Convert synthetic data to a tensor if not already
+        size=real_data.size(2),        # Target size along the time step dimension
+        mode='linear',                 # Linear interpolation
+        align_corners=False
+    )
+
+    # Convert back to NumPy if needed
+    synthetic_data_resized = synthetic_data_resized.numpy()
+
+    # Check shapes again
+    print(f"Real data shape: {real_data.shape}")
+    print(f"Resized synthetic data shape: {synthetic_data_resized.shape}")
+
+    # Concatenate the resized synthetic data with the real data
+    all_data = np.concatenate((real_data, synthetic_data_resized), axis=0)
+
+    print(f"Final all_data shape: {all_data.shape}")
+
+
+    # Generate labels: 0 for real, 1 for synthetic
+    real_labels = np.zeros((real_data.shape[0], 1))
+    synthetic_labels = np.ones((synthetic_data.shape[0], 1))
+    all_labels = np.concatenate((real_labels, synthetic_labels), axis=0)
+
+    # Split into train and test sets
+    num_samples = all_data.shape[0]
+    indices = np.random.permutation(num_samples)
+    split = int(num_samples * (1 - test_split))
+
+    train_indices, test_indices = indices[:split], indices[split:]
+    train_data, test_data = all_data[train_indices], all_data[test_indices]
+    train_labels, test_labels = all_labels[train_indices], all_labels[test_indices]
+
+    # Convert to PyTorch tensors
+    train_dataset = TensorDataset(
+        torch.tensor(train_data, dtype=torch.float32),
+        torch.tensor(train_labels, dtype=torch.float32),
+    )
+    test_dataset = TensorDataset(
+        torch.tensor(test_data, dtype=torch.float32),
+        torch.tensor(test_labels, dtype=torch.float32),
+    )
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    return train_loader, test_loader
+
+# Classifier for Evaluation (already defined)
+class Classifier(nn.Module):
+    def __init__(self, input_dim, num_classes):
+        super(Classifier, self).__init__()
+        self.model = nn.Sequential(
+            nn.Conv1d(input_dim, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2),
+            nn.Conv1d(64, 128, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2),
+            nn.Flatten(),
+            nn.Linear(128 * (time_steps // 4), num_classes),
+            nn.Softmax(dim=1)
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
+# Train Classifier
+def train_classifier(model, train_loader, test_loader, num_epochs=10):
+    criterion = torch.nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    
+    for epoch in range(num_epochs):
+        model.train()
+        for inputs, labels in train_loader:
+            # Ensure labels are 1D
+            labels = labels.squeeze(-1)  # Remove the last dimension if it's singleton
+            labels = labels.long()  # Ensure labels are of type LongTensor
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+            
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+        
+        print(f"Epoch {epoch+1}, Loss: {loss.item()}, Logits: {outputs[:5]}, Labels: {labels[:5]}")
+
+    print("Training complete.")
+
+    # Evaluate
+    model.eval()
+    correct, total = 0, 0
+    with torch.no_grad():
+        for data, labels in test_loader:
+            labels = labels.squeeze(-1).long().to(device)  # Same reshaping as in training
+            data = data.to(device)
+            outputs = model(data)
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+    accuracy = 100 * correct / total
+    print(f"Test Accuracy: {accuracy:.2f}%")
+    return accuracy
+
+
+# Generate synthetic data using the trained generator
+synthetic_data = generate_augmented_data(generator, 100, latent_dim, device, time_steps, channels)
+
+# Prepare train and test dataloaders using both real and synthetic data
+train_loader, test_loader = prepare_dataloaders(real_data, synthetic_data, test_split=0.2, batch_size=batch_size)
+
+# Initialize and train the classifier
+classifier = Classifier(input_dim=channels, num_classes=2).to(device)
+print("Training classifier on real and synthetic data...")
+train_classifier(classifier, train_loader, test_loader, num_epochs=10)
