@@ -138,10 +138,10 @@ def model_evaluation(train_dataset, test_dataset, input_size, num_classes, num_e
         'MLP': MLPModel(input_size=input_size, num_classes=num_classes),
         'LSTM': LSTMModel(num_classes=num_classes),  
         'BLSTM': BLSTMModel(num_classes=num_classes),  
-        'LSTM-FCN': LSTMFCNModel( num_classes=num_classes), 
-        'CNN_BiLSTM': CNN_BiLSTM(input_size=input_size, num_classes=num_classes),
-        'WDCNN': WDCNN(input_size=input_size, num_classes=num_classes),
-        'Transformer': TransformerModel(input_size=input_size, num_classes=num_classes)
+        'LSTM-FCN': LSTMFCNModel(num_classes=num_classes), 
+        'CNN_BiLSTM': CNN_BiLSTM(num_classes=num_classes),
+        'WDCNN': WDCNN(num_classes=num_classes),
+        # 'Transformer': TransformerModel(input_size=input_size, num_classes=num_classes)
     }
     
     results = {}
