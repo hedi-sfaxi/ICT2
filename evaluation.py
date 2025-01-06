@@ -1,15 +1,13 @@
 import torch
 
 from sklearn.metrics import accuracy_score
-import torch.distributions as dist
 import numpy as np
 import torch.optim as optim
-from evaluation_models import VGGModel, MLPModel, ResNetModel, LSTMFCNModel, LSTMModel, BLSTMModel, train_model, evaluate_model
+from evaluation_models import  MLPModel, LSTMFCNModel, LSTMModel, BLSTMModel, CNN_BiLSTM, WDCNN, TransformerModel, train_model, evaluate_model
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
-from sklearn.preprocessing import MinMaxScaler
 
 def kl_divergence(real_data, generated_data, num_bins = 64):
 
@@ -17,10 +15,9 @@ def kl_divergence(real_data, generated_data, num_bins = 64):
     Calcule la divergence KL entre les données réelles et générées en utilisant torch.nn.functional.kl_div.
     """
     # Flatten les données
-    real_data = real_data.detach().cpu().flatten()
-    generated_data = generated_data.detach().cpu().flatten()
+    real_data = real_data.flatten()
+    generated_data = generated_data.flatten()
     
-
     # Calculer les histogrammes normalisés
     real_hist, bin_edges = torch.histogram(real_data, bins=num_bins, density=True)
     generated_hist, _ = torch.histogram(generated_data, bins=bin_edges, density=True)
@@ -139,11 +136,12 @@ def model_evaluation(train_dataset, test_dataset, input_size, num_classes, num_e
     # Define your models
     models_dict = {
         'MLP': MLPModel(input_size=input_size, num_classes=num_classes),
-        # 'VGG': VGGModel(num_classes=num_classes),  
-        # 'ResNet': ResNetModel(num_classes=num_classes),  
         'LSTM': LSTMModel(num_classes=num_classes),  
         'BLSTM': BLSTMModel(num_classes=num_classes),  
         'LSTM-FCN': LSTMFCNModel( num_classes=num_classes), 
+        'CNN_BiLSTM': CNN_BiLSTM(input_size=input_size, num_classes=num_classes),
+        'WDCNN': WDCNN(input_size=input_size, num_classes=num_classes),
+        'Transformer': TransformerModel(input_size=input_size, num_classes=num_classes)
     }
     
     results = {}

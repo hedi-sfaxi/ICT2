@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torchvision.models as models
 import numpy as np
 
 
@@ -25,48 +24,6 @@ class MLPModel(nn.Module):
 
     def forward(self, x):
         return self.model(x)
-
-class VGGModel(nn.Module):
-    def __init__(self, num_classes):
-        super(VGGModel, self).__init__()
-        self.base_model = models.vgg16(pretrained=False)
-        self.base_model.classifier[6] = nn.Sequential(
-            nn.Linear(4096, num_classes),
-            nn.Dropout(0.5),
-            nn.Softmax(dim=1)
-        )
-
-    def forward(self, x):
-        # Vérification de la forme de l'entrée et ajout de dimensions nécessaires
-        if x.dim() == 3 and x.size(2) == 1:
-            x = x.squeeze(2)  # (batch_size, 1024, 1) -> (batch_size, 1024)
-        
-        # Redimensionner pour ajouter la dimension spatiale de 1 (batch_size, 1024, 1) -> (batch_size, 1, 1024, 1)
-        x = x.unsqueeze(1)  # (batch_size, 1024) -> (batch_size, 1, 1024, 1)
-        
-        # Appliquer l'interpolation pour redimensionner la taille spatiale à (224, 224)
-        x = torch.nn.functional.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
-        
-        # Répliquer le canal pour obtenir 3 canaux
-        x = x.expand(-1, 3, -1, -1)  # (batch_size, 1, 224, 224) -> (batch_size, 3, 224, 224)
-
-        return self.base_model(x)
-
-
-class ResNetModel(nn.Module):
-    def __init__(self, num_classes):
-        super(ResNetModel, self).__init__()
-        self.base_model = models.resnet18(pretrained=False)
-        self.base_model.fc = nn.Sequential(
-            nn.Linear(self.base_model.fc.in_features, num_classes),
-            nn.Softmax(dim=1)
-        )
-
-    def forward(self, x):
-        x = x.permute(0, 2, 1)  # Réorganiser la forme en (batch_size, 1, 1024)
-        x = torch.nn.functional.interpolate(x, size=(224, 224))  # Redimensionner à 224x224 pour ResNet
-        x = x.expand(-1, 3, -1, -1)  # Dupliquer pour 3 canaux
-        return self.base_model(x)
 
 class LSTMModel(nn.Module):
     def __init__(self, num_classes):
@@ -135,6 +92,98 @@ class LSTMFCNModel(nn.Module):
         combined = torch.cat((lstm_out[:, -1, :], x), dim=1)  # Concaténation de la dernière sortie du LSTM et des convolutions
         return self.fc(combined)  # Classification finale
 
+class CNN_BiLSTM(nn.Module):
+    def __init__(self, input_size, num_classes):
+        super(CNN_BiLSTM, self).__init__()
+        
+        # CNN Layers
+        self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=64, kernel_size=3)
+        self.pool = nn.MaxPool1d(2)
+        
+        # LSTM Layers
+        self.lstm = nn.LSTM(input_size=64, hidden_size=64, bidirectional=True, batch_first=True)
+        
+        # Fully connected layer
+        self.fc = nn.Linear(64 * 2, num_classes)
+    
+    def forward(self, x):
+        
+        x = x.permute(0,2,1) # (batch_size, channels, seq_len)
+        # CNN forward
+        x = self.pool(torch.relu(self.conv1(x)))
+        
+        # Prepare input for LSTM
+        x = x.permute(0, 2, 1)  # (batch_size, seq_len, features)
+        
+        # LSTM forward
+        x, _ = self.lstm(x)
+        
+        # Output layer
+        x = self.fc(x[:, -1, :])  # Get the output of the last timestep
+        
+        return x
+    
+class WDCNN(nn.Module):
+    def __init__(self, input_size, num_classes):
+        super(WDCNN, self).__init__()
+        
+        # Initial CNN layer (16 kernels, kernel size = 64)
+        self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=16, kernel_size=64)
+        self.pool = nn.MaxPool1d(2)
+        
+        # Other CNN layers (64 kernels, kernel size = 3)
+        self.conv2 = nn.Conv1d(in_channels=16, out_channels=64, kernel_size=3)
+        self.conv3 = nn.Conv1d(in_channels=64, out_channels=64, kernel_size=3)
+        
+        # Fully connected layer
+        self.fc = nn.Linear(64, num_classes)
+    
+    def forward(self, x):
+        # Initial CNN layer
+        x = self.pool(torch.relu(self.conv1(x)))
+        
+        # Additional CNN layers
+        x = self.pool(torch.relu(self.conv2(x)))
+        x = self.pool(torch.relu(self.conv3(x)))
+        
+        # Flatten and fully connected layer
+        x = x.view(x.size(0), -1)  # Flatten the tensor
+        x = self.fc(x)
+        
+        return x
+
+class TransformerModel(nn.Module):
+    def __init__(self, input_size, num_classes, model_dim=64, n_encoders=4, n_decoders=4, n_heads=4, hidden_dim=128, dropout=0.1):
+        super(TransformerModel, self).__init__()
+        
+        # Embedding layer
+        self.embedding = nn.Embedding(input_size, model_dim)
+        
+        # Transformer Encoder and Decoder layers
+        self.encoder_layer = nn.TransformerEncoderLayer(d_model=model_dim, nhead=n_heads, dim_feedforward=hidden_dim, dropout=dropout)
+        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=n_encoders)
+        
+        self.decoder_layer = nn.TransformerDecoderLayer(d_model=model_dim, nhead=n_heads, dim_feedforward=hidden_dim, dropout=dropout)
+        self.transformer_decoder = nn.TransformerDecoder(self.decoder_layer, num_layers=n_decoders)
+        
+        # Output Layer
+        self.fc_out = nn.Linear(model_dim, num_classes)
+    
+    def forward(self, src, tgt):
+        # Embedding input sequences
+        src_emb = self.embedding(src)
+        tgt_emb = self.embedding(tgt)
+        
+        # Encoder forward pass
+        memory = self.transformer_encoder(src_emb)
+        
+        # Decoder forward pass
+        output = self.transformer_decoder(tgt_emb, memory)
+        
+        # Final output layer
+        output = self.fc_out(output)
+        
+        return output
 
 def train_model(model, train_loader, criterion, optimizer, device):
     model.train()
@@ -147,19 +196,16 @@ def train_model(model, train_loader, criterion, optimizer, device):
                 
         optimizer.zero_grad()
         outputs = model(data)
-        _, true_labels = labels.max(1)
         
-        loss = criterion(outputs, true_labels)
+        loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
         
         running_loss += loss.item()
-        # Convertir les labels one-hot en indices
-        # Obtenir les indices des prédictions
         _, preds = outputs.max(1)
         
         # Calcul de l'exactitude
-        correct_preds += (preds == true_labels).sum().item()
+        correct_preds += (preds == labels).sum().item()
         total_preds += labels.size(0)
     
     epoch_loss = running_loss / len(train_loader)
@@ -172,16 +218,14 @@ def evaluate_model(model, val_loader, criterion, device):
     correct_preds = 0
     total_preds = 0
     all_preds = []  # Liste pour collecter toutes les prédictions
-    all_labels = []  # Liste pour collecter toutes les véritables étiquettes
     
     with torch.no_grad():
         for data, labels in val_loader:
             data, labels = data.to(device), labels.to(device)
             
             outputs = model(data)
-            _, true_labels = labels.max(1)
             
-            loss = criterion(outputs, true_labels)
+            loss = criterion(outputs, labels)
             running_loss += loss.item()
             
             # Obtenir les indices des prédictions
@@ -190,7 +234,7 @@ def evaluate_model(model, val_loader, criterion, device):
             all_preds.append(preds.cpu().numpy())  
             
             # Calcul de l'exactitude
-            correct_preds += (preds == true_labels).sum().item()
+            correct_preds += (preds == labels).sum().item()
             total_preds += labels.size(0)
     
     # Convertir les listes de prédictions et d'étiquettes en tableaux numpy
