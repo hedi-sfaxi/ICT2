@@ -93,11 +93,11 @@ class LSTMFCNModel(nn.Module):
         return self.fc(combined)  # Classification finale
 
 class CNN_BiLSTM(nn.Module):
-    def __init__(self, input_size, num_classes):
+    def __init__(self, num_classes):
         super(CNN_BiLSTM, self).__init__()
         
         # CNN Layers
-        self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=64, kernel_size=3)
+        self.conv1 = nn.Conv1d(in_channels=1, out_channels=64, kernel_size=3)
         self.pool = nn.MaxPool1d(2)
         
         # LSTM Layers
@@ -124,32 +124,48 @@ class CNN_BiLSTM(nn.Module):
         return x
     
 class WDCNN(nn.Module):
-    def __init__(self, input_size, num_classes):
+    def __init__(self, num_classes):
         super(WDCNN, self).__init__()
-        
-        # Initial CNN layer (16 kernels, kernel size = 64)
-        self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=16, kernel_size=64)
-        self.pool = nn.MaxPool1d(2)
-        
-        # Other CNN layers (64 kernels, kernel size = 3)
-        self.conv2 = nn.Conv1d(in_channels=16, out_channels=64, kernel_size=3)
-        self.conv3 = nn.Conv1d(in_channels=64, out_channels=64, kernel_size=3)
-        
-        # Fully connected layer
-        self.fc = nn.Linear(64, num_classes)
-    
+
+        # Première couche CNN (Wide)
+        self.conv1 = nn.Conv1d(in_channels=1, out_channels=16, kernel_size=64, stride=1, padding=32)
+        self.pool = nn.MaxPool1d(kernel_size=2)
+
+        # Autres couches CNN (Deep)
+        self.conv2 = nn.Conv1d(in_channels=16, out_channels=64, kernel_size=3, stride=1, padding=1)
+        self.conv3 = nn.Conv1d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1)
+        self.conv4 = nn.Conv1d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1)
+
+        # Couches fully connected
+        self.fc1 = nn.Linear(64 * (1024 // 2), 512)  # assuming seq_len=1024 and max pool reduces seq_len by 2
+        self.fc2 = nn.Linear(512, num_classes)  # For binary classification (adjust output size as needed)
+
+        # Activation function
+        self.relu = nn.ReLU()
+
     def forward(self, x):
-        # Initial CNN layer
-        x = self.pool(torch.relu(self.conv1(x)))
-        
-        # Additional CNN layers
-        x = self.pool(torch.relu(self.conv2(x)))
-        x = self.pool(torch.relu(self.conv3(x)))
-        
-        # Flatten and fully connected layer
-        x = x.view(x.size(0), -1)  # Flatten the tensor
-        x = self.fc(x)
-        
+        # Pass through first convolution and pooling layer4
+        x = x.permute(0,2,1)
+        x = self.conv1(x)
+        x = self.relu(x)
+        x = self.pool(x)
+
+        # Pass through subsequent convolutional layers
+        x = self.conv2(x)
+        x = self.relu(x)
+        x = self.conv3(x)
+        x = self.relu(x)
+        x = self.conv4(x)
+        x = self.relu(x)
+
+        # Flatten the output for the fully connected layers
+        x = x.view(x.size(0), -1)  # Flatten to (batch_size, features)
+
+        # Pass through fully connected layers
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+
         return x
 
 class TransformerModel(nn.Module):
@@ -169,19 +185,18 @@ class TransformerModel(nn.Module):
         # Output Layer
         self.fc_out = nn.Linear(model_dim, num_classes)
     
-    def forward(self, src, tgt):
-        # Embedding input sequences
+    def forward(self, src):
+        # Embedding de l'entrée (transformer la série temporelle en embeddings)
         src_emb = self.embedding(src)
-        tgt_emb = self.embedding(tgt)
         
         # Encoder forward pass
         memory = self.transformer_encoder(src_emb)
         
-        # Decoder forward pass
-        output = self.transformer_decoder(tgt_emb, memory)
+        # Prendre la sortie de l'encodeur et faire une réduction sur la séquence (par exemple, la moyenne)
+        pooled_output = memory.mean(dim=1)  # Vous pouvez aussi essayer d'utiliser le dernier état
         
-        # Final output layer
-        output = self.fc_out(output)
+        # Prédiction de classe
+        output = self.fc_out(pooled_output)
         
         return output
 
